@@ -8,22 +8,11 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.status(200).json({ status: "Hello Bhailog! Google Map Scraper is working 🚀" });
-});
+let browser; // Persistent Puppeteer instance
 
-app.post("/get-route", async (req, res) => {
-  const { source, destination, mode } = req.body;
-
-  if (!source || !destination || !mode) {
-    return res.status(400).json({ error: "Missing required parameters: source, destination, mode" });
-  }
-
-  let browser;
-  try {
-    console.log(`Fetching route: ${source} -> ${destination} via ${mode}`);
-
-    // Launch Puppeteer with lightweight settings
+// ✅ Function to start Puppeteer once and reuse it
+const launchBrowser = async () => {
+  if (!browser || !browser.isConnected()) {
     browser = await puppeteer.launch({
       headless: "new",
       executablePath: "/usr/bin/google-chrome-stable", // Use system Chrome
@@ -40,10 +29,37 @@ app.post("/get-route", async (req, res) => {
         "--disable-extensions",
       ],
     });
+    console.log("✅ Puppeteer launched");
+  }
+};
 
+// ✅ Start Puppeteer when server starts
+launchBrowser();
+
+// ✅ Restart Puppeteer if it crashes
+const restartBrowser = async () => {
+  console.error("❌ Puppeteer crashed. Restarting...");
+  if (browser) await browser.close();
+  browser = null;
+  await launchBrowser();
+};
+
+app.get("/", (req, res) => {
+  res.status(200).json({ status: "Hello Bhailog! Google Map Scraper is working 🚀" });
+});
+
+app.post("/get-route", async (req, res) => {
+  const { source, destination, mode } = req.body;
+
+  if (!source || !destination || !mode) {
+    return res.status(400).json({ error: "Missing required parameters: source, destination, mode" });
+  }
+
+  try {
+    await launchBrowser(); // Ensure Puppeteer is running
     const page = await browser.newPage();
 
-    // Block unnecessary resources
+    // ✅ Block unnecessary resources to save memory
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const blockedTypes = ["image", "stylesheet", "font", "media", "xhr", "fetch", "script"];
@@ -54,11 +70,13 @@ app.post("/get-route", async (req, res) => {
       }
     });
 
+    console.log(`🚀 Fetching route: ${source} -> ${destination} via ${mode}`);
     console.time("Page Load");
+
     const mapsURL = `https://www.google.com/maps/dir/${encodeURIComponent(source)}/${encodeURIComponent(destination)}`;
     await page.goto(mapsURL, { waitUntil: "domcontentloaded", timeout: 20000 });
 
-    // Extract route details
+    // ✅ Extract route details
     const routeDetails = await page.evaluate((mode) => {
       let routes = document.querySelectorAll("div.UgZKXd.clearfix.yYG3jf");
       if (routes.length === 0) return { error: "No routes found." };
@@ -78,21 +96,17 @@ app.post("/get-route", async (req, res) => {
 
     console.timeEnd("Page Load");
 
-    await page.close();
-    await browser.close();
-
+    await page.close(); // ✅ Close page but keep browser open
     res.json(routeDetails);
   } catch (error) {
-    console.error("Error fetching route:", error.message || error);
-    
-    // Auto-restart Puppeteer if it crashes
-    if (error.message.includes("Target closed") || error.message.includes("Session closed")) {
-      res.status(500).json({ error: "Puppeteer crashed. Restarting..." });
-    } else {
-      res.status(500).json({ error: `Failed to fetch route details: ${error.message || "Unknown error"}` });
+    console.error("❌ Error fetching route:", error.message || error);
+
+    // ✅ Restart Puppeteer if session closed
+    if (error.message.includes("Session closed") || error.message.includes("Target closed")) {
+      await restartBrowser();
     }
-  } finally {
-    if (browser) await browser.close(); // Ensure cleanup
+
+    res.status(500).json({ error: `Failed to fetch route details: ${error.message || "Unknown error"}` });
   }
 });
 
