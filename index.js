@@ -8,13 +8,13 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Global Puppeteer browser instance to reduce memory usage
+// Global Puppeteer instance for better performance
 let browser;
 
 const initBrowser = async () => {
   if (!browser) {
     browser = await puppeteer.launch({
-      headless: true, // Runs in minimal resource mode
+      headless: "new", // Use new Headless mode
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -27,7 +27,7 @@ const initBrowser = async () => {
   }
 };
 
-// Close browser gracefully when server shuts down
+// Close browser gracefully on shutdown
 process.on("SIGINT", async () => {
   if (browser) await browser.close();
   process.exit(0);
@@ -48,12 +48,11 @@ app.post("/get-route", async (req, res) => {
 
   try {
     console.log(`Fetching route: ${source} -> ${destination} via ${mode}`);
-    
-    // Initialize browser if not already started
-    await initBrowser();
+
+    await initBrowser(); // Ensure browser is running
     const page = await browser.newPage();
 
-    // Block unnecessary resources for faster loading
+    // Block unnecessary resources
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const blockedTypes = ["image", "stylesheet", "font", "media", "xhr", "fetch", "script"];
@@ -66,7 +65,6 @@ app.post("/get-route", async (req, res) => {
 
     console.time("Page Load");
 
-    // Google Maps URL
     const mapsURL = `https://www.google.com/maps/dir/${encodeURIComponent(source)}/${encodeURIComponent(destination)}`;
     await page.goto(mapsURL, { waitUntil: "networkidle2", timeout: 20000 });
 
@@ -89,7 +87,7 @@ app.post("/get-route", async (req, res) => {
     }, mode);
 
     console.timeEnd("Page Load");
-    
+
     await page.close(); // Close page but keep browser open
     res.json(routeDetails);
   } catch (error) {
