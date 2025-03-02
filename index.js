@@ -23,9 +23,10 @@ app.post("/get-route", async (req, res) => {
   try {
     console.log(`Fetching route: ${source} -> ${destination} via ${mode}`);
 
-    // Launch Puppeteer for each request (avoids shared session issues)
+    // Launch Puppeteer with lightweight settings
     browser = await puppeteer.launch({
       headless: "new",
+      executablePath: "/usr/bin/google-chrome-stable", // Use system Chrome
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -33,6 +34,10 @@ app.post("/get-route", async (req, res) => {
         "--disable-dev-shm-usage",
         "--single-process",
         "--no-zygote",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-extensions",
       ],
     });
 
@@ -51,7 +56,7 @@ app.post("/get-route", async (req, res) => {
 
     console.time("Page Load");
     const mapsURL = `https://www.google.com/maps/dir/${encodeURIComponent(source)}/${encodeURIComponent(destination)}`;
-    await page.goto(mapsURL, { waitUntil: "networkidle2", timeout: 20000 });
+    await page.goto(mapsURL, { waitUntil: "domcontentloaded", timeout: 20000 });
 
     // Extract route details
     const routeDetails = await page.evaluate((mode) => {
@@ -75,13 +80,19 @@ app.post("/get-route", async (req, res) => {
 
     await page.close();
     await browser.close();
-    
+
     res.json(routeDetails);
   } catch (error) {
     console.error("Error fetching route:", error.message || error);
-    res.status(500).json({ error: `Failed to fetch route details: ${error.message || "Unknown error"}` });
+    
+    // Auto-restart Puppeteer if it crashes
+    if (error.message.includes("Target closed") || error.message.includes("Session closed")) {
+      res.status(500).json({ error: "Puppeteer crashed. Restarting..." });
+    } else {
+      res.status(500).json({ error: `Failed to fetch route details: ${error.message || "Unknown error"}` });
+    }
   } finally {
-    if (browser) await browser.close(); // Ensure browser is closed in case of an error
+    if (browser) await browser.close(); // Ensure cleanup
   }
 });
 
