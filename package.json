@@ -12,7 +12,6 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "gmaps-route-scraper": "^1.0.0",
-    "puppeteer": "^24.3.0"
+    "puppeteer": "^19.7.2"
   }
 }
