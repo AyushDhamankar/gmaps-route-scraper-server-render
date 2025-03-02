@@ -8,6 +8,31 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// Global Puppeteer browser instance to reduce memory usage
+let browser;
+
+const initBrowser = async () => {
+  if (!browser) {
+    browser = await puppeteer.launch({
+      headless: true, // Runs in minimal resource mode
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--single-process",
+        "--no-zygote",
+      ],
+    });
+  }
+};
+
+// Close browser gracefully when server shuts down
+process.on("SIGINT", async () => {
+  if (browser) await browser.close();
+  process.exit(0);
+});
+
 app.get("/", (req, res) => {
   res.status(200).json({ status: "Hello Bhailog! Google Map Scraper is working 🚀" });
 });
@@ -21,23 +46,18 @@ app.post("/get-route", async (req, res) => {
     });
   }
 
-  let browser;
   try {
     console.log(`Fetching route: ${source} -> ${destination} via ${mode}`);
-
-    // Launch Puppeteer
-    browser = await puppeteer.launch({
-      headless: true, // Ensure full headless mode for better performance
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-
+    
+    // Initialize browser if not already started
+    await initBrowser();
     const page = await browser.newPage();
 
-    // Block unnecessary resources for better performance
+    // Block unnecessary resources for faster loading
     await page.setRequestInterception(true);
     page.on("request", (req) => {
-      const blockedResources = ["image", "stylesheet", "font", "media", "xhr"];
-      if (blockedResources.includes(req.resourceType())) {
+      const blockedTypes = ["image", "stylesheet", "font", "media", "xhr", "fetch", "script"];
+      if (blockedTypes.includes(req.resourceType())) {
         req.abort();
       } else {
         req.continue();
@@ -46,21 +66,17 @@ app.post("/get-route", async (req, res) => {
 
     console.time("Page Load");
 
-    // Google Maps URL with encoded parameters
+    // Google Maps URL
     const mapsURL = `https://www.google.com/maps/dir/${encodeURIComponent(source)}/${encodeURIComponent(destination)}`;
-    await page.goto(mapsURL, { waitUntil: "networkidle2", timeout: 30000 });
+    await page.goto(mapsURL, { waitUntil: "networkidle2", timeout: 20000 });
 
-    // Extract route details based on the selected mode
+    // Extract route details
     const routeDetails = await page.evaluate((mode) => {
       let routes = document.querySelectorAll("div.UgZKXd.clearfix.yYG3jf");
-      
-      if (routes.length === 0) {
-        return { error: "No routes found. Google Maps structure might have changed." };
-      }
+      if (routes.length === 0) return { error: "No routes found." };
 
       for (let route of routes) {
         let routeMode = route.querySelector(".Os0QJc.google-symbols")?.getAttribute("aria-label") || "Unknown";
-
         if (routeMode.toLowerCase() === mode.toLowerCase()) {
           return {
             mode: routeMode,
@@ -73,13 +89,12 @@ app.post("/get-route", async (req, res) => {
     }, mode);
 
     console.timeEnd("Page Load");
-
+    
+    await page.close(); // Close page but keep browser open
     res.json(routeDetails);
   } catch (error) {
     console.error("Error fetching route:", error.message || error);
     res.status(500).json({ error: `Failed to fetch route details: ${error.message || "Unknown error"}` });
-  } finally {
-    if (browser) await browser.close(); // Ensure browser is closed in case of error
   }
 });
 
